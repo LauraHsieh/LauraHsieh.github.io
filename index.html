@@ -40,7 +40,6 @@
             box-shadow: 0 8px 16px rgba(0,0,0,0.2); transform: scaleX(-1); z-index: 100;
         }
         .input_video, .output_canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
-        .input_video { opacity: 0; }  /* 鏡頭畫面不顯示，只留黑底白骨架 */
     </style>
 </head>
 <body>
@@ -118,8 +117,7 @@
     background-color: #000; border-radius: 16px; overflow: hidden;
     box-shadow: 0 8px 16px rgba(0,0,0,0.2); z-index: 100;
   }
-  /* 不顯示鏡頭畫面（黑底），只留白色手部骨架；video 仍在背景運作供手部偵測使用 */
-  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0 !important; }
+  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 1 !important; }
   #pv canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
  
   /* 上方工具列（與其他關卡相同） */
@@ -729,8 +727,7 @@ async function initCamera() {
     box-shadow: 0 8px 16px rgba(0,0,0,0.2); z-index: 100;
     display: block !important;
   }
-  /* 不顯示鏡頭畫面（黑底），只留白色手部骨架；video 仍在背景運作供手部偵測使用 */
-  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0 !important; }
+  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 1 !important; }
   #pv canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
  
   .header-bar {
@@ -804,7 +801,7 @@ const IMG_MU_CLOSED  = "./tree-game/木1005.png";
  
 const STAGE_COUNT = 3;
  
-const COOLDOWN   = 700;    // 每次砍完的冷卻時間 (ms)
+const COOLDOWN   = 550;    // 每次砍完的冷卻時間 (ms)
 const BLINK_MIN  = 2600, BLINK_MAX = 5200;   // 眨眼間隔
 const BLINK_HOLD = 130;    // 閉眼維持多久 (ms)
  
@@ -928,17 +925,18 @@ function pushSample(t, cx, cy, unit, sx, sy) {
   handSeen = t; hx = sx; hy = sy;
   unitEMA = unitEMA ? unitEMA * 0.7 + unit * 0.3 : unit;
   samples.push({ t, cx, cy, sx, sy });
-  while (samples.length && t - samples[0].t > 230) samples.shift();
+  while (samples.length && t - samples[0].t > 200) samples.shift();   // 只看最近 0.2 秒的動作，判斷更即時
   trail.push({ x: sx, y: sy, t });
   while (trail.length && t - trail[0].t > 280) trail.shift();
  
-  if (samples.length < 3 || t - lastChop < COOLDOWN) return;
+  if (samples.length < 2 || t - lastChop < COOLDOWN) return;
   const o = samples[0], n = samples[samples.length - 1];
   const dt = (n.t - o.t) / 1000;
-  if (dt < 0.07) return;
+  if (dt < 0.05) return;
   const disp = Math.hypot(n.cx - o.cx, n.cy - o.cy);
   const speed = disp / dt / unitEMA;
-  if (disp > 1.4 * unitEMA / sens && speed > 6.5 / sens) {
+  // 門檻（以手掌長度為單位）：移動超過約 1.2 個手掌、速度超過約 5.6 個手掌/秒 就算劈下
+  if (disp > 1.0 * unitEMA / sens && speed > 4.8 / sens) {
     chop(n.sx - o.sx, n.sy - o.sy, (n.sx + o.sx) / 2, (n.sy + o.sy) / 2);
   }
 }
@@ -986,7 +984,7 @@ function detectHands() {
     pushSample(performance.now(), x * aspect, y, unit, (1 - x) * W, y * H);
     drawPreview(smoothLandmarks(lm, performance.now()));
   } else {
-    samples.length = 0;
+    // 快速劈下時畫面模糊，偶爾一兩格偵測不到手；不清空動作紀錄，避免劈的動作被中斷而沒觸發
     skelState = null;
     dctx.clearRect(0, 0, dots.width, dots.height);
   }
@@ -1384,8 +1382,7 @@ function loadImg(src) {
     box-shadow: 0 8px 16px rgba(0,0,0,0.2); z-index: 100;
     display: block !important;
   }
-  /* 不顯示鏡頭畫面（黑底），只留白色手部骨架；video 仍在背景運作供手部偵測使用 */
-  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0 !important; }
+  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 1 !important; }
   #pv canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
  
   .header-bar {
@@ -2031,8 +2028,7 @@ async function initCamera() {
     box-shadow: 0 8px 16px rgba(0,0,0,0.2); z-index: 100;
     display: block !important;
   }
-  /* 不顯示鏡頭畫面（黑底），只留白色手部骨架；video 仍在背景運作供手部偵測使用 */
-  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0 !important; }
+  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 1 !important; }
   #pv canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
  
   .header-bar {
@@ -2754,9 +2750,7 @@ async function initCamera() {
  
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            // 不顯示鏡頭畫面：黑底，只畫白色手部骨架
-            canvasCtx.fillStyle = '#000000';
-            canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
             
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                 drawConnectors(canvasCtx, results.multiHandLandmarks[0], HAND_CONNECTIONS, {color: '#FFFFFF', lineWidth: 3});
