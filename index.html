@@ -39,6 +39,8 @@
             background-color: #000; border-radius: 16px; overflow: hidden;
             box-shadow: 0 8px 16px rgba(0,0,0,0.2); transform: scaleX(-1); z-index: 100;
         }
+        /* 平板／手機：視訊窗縮小一些 */
+        .touch .camera-container { width: 176px; height: 132px; bottom: 20px; left: 20px; }
         .input_video, .output_canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
     </style>
 </head>
@@ -119,6 +121,8 @@
   }
   #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 1 !important; }
   #pv canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  /* 平板／手機：視訊窗縮小一些 */
+  .touch #pv { width: 176px; height: 132px; bottom: 20px; left: 20px; }
  
   /* 上方工具列（與其他關卡相同） */
   .header-bar {
@@ -236,9 +240,10 @@ const HEADER_OFFSET = 60;   // 往下移，留空間給工具列、五個字的�
  
 const $ = s => document.querySelector(s);
  
-/* 效能：平板／手機（觸控裝置，含 iPad）效能較弱，降低畫布解析度、圖片處理尺寸，並在偵測變慢時自動放慢偵測頻率 */
+/* 效能：偵測變慢時自動放慢偵測頻率；平板／手機（觸控裝置，含 iPad）的視訊窗稍微縮小 */
 const IS_TOUCH = matchMedia('(pointer: coarse)').matches || /iPad|iPhone|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints || 0) > 1);
-const MAX_DPR = IS_TOUCH ? 1.25 : 2;
+const MAX_DPR = 2;
+if (IS_TOUCH) document.documentElement.classList.add('touch');
 let lastDetectT = 0, detectAvg = 0, detectGap = 0;
 const canvas = $('#stage'), ctx = canvas.getContext('2d');
 const video = $('#cam'), dots = $('#dots'), dctx = dots.getContext('2d');
@@ -316,7 +321,7 @@ function imageRect(img) {
 function removeBackground(img) {
   // 原圖很大（例如 3508×2481）時先縮小再處理，避免畫面卡住；2000px 在 Retina 螢幕上也夠清楚
   const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
-  const sc = Math.min(1, (IS_TOUCH ? 1400 : 2000) / Math.max(iw, ih));
+  const sc = Math.min(1, 2000 / Math.max(iw, ih));
   const w = Math.round(iw * sc), h = Math.round(ih * sc);
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const x = c.getContext('2d', { willReadFrequently: true });
@@ -739,6 +744,8 @@ async function initCamera() {
   }
   #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 1 !important; }
   #pv canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  /* 平板／手機：視訊窗縮小一些 */
+  .touch #pv { width: 176px; height: 132px; bottom: 20px; left: 20px; }
  
   .header-bar {
     position: fixed; top: 0; left: 0; right: 0; z-index: 10;
@@ -823,9 +830,10 @@ const CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[1,5],[5,6],[6,7],[7,8],[5,9],[9,10
    ============================================================ */
 const $ = s => document.querySelector(s);
  
-/* 效能：平板／手機（觸控裝置，含 iPad）效能較弱，降低畫布解析度、圖片處理尺寸，並在偵測變慢時自動放慢偵測頻率 */
+/* 效能：偵測變慢時自動放慢偵測頻率；平板／手機（觸控裝置，含 iPad）的視訊窗稍微縮小 */
 const IS_TOUCH = matchMedia('(pointer: coarse)').matches || /iPad|iPhone|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints || 0) > 1);
-const MAX_DPR = IS_TOUCH ? 1.25 : 2;
+const MAX_DPR = 2;
+if (IS_TOUCH) document.documentElement.classList.add('touch');
 let lastDetectT = 0, detectAvg = 0, detectGap = 0;
 const canvas = $('#stage'), ctx = canvas.getContext('2d');
 const video = $('#cam'), dots = $('#dots'), dctx = dots.getContext('2d');
@@ -877,6 +885,24 @@ function layout(first) {
   canvas.height = Math.round(H * DPR);
   sizeCursorLayer();
   glyphSize = Math.min(W * 0.8, H * 0.66);
+  scaledCache = new Map(); staticDrawn = false;
+}
+ 
+// 依目前大小預先縮放好的角色圖（每格只要 1:1 貼上，不用每次縮放 2000px 的大圖）
+let scaledCache = new Map();
+function scaledImage(img) {
+  let c = scaledCache.get(img);
+  if (c) return c;
+  const box = imageBox(img);
+  c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(box.w * DPR)); c.height = Math.max(1, Math.round(box.h * DPR));
+  const x = c.getContext('2d');
+  x.imageSmoothingQuality = 'high';
+  x.drawImage(img, 0, 0, c.width, c.height);
+  c.dx = Math.round(box.x * DPR) / DPR; c.dy = Math.round(box.y * DPR) / DPR;   // 對齊螢幕像素，貼圖最快也最清楚
+  c.dw = c.width / DPR; c.dh = c.height / DPR;
+  scaledCache.set(img, c);
+  return c;
 }
  
 function imageBox(img) {
@@ -1053,8 +1079,21 @@ function update(f, now) {
    ============================================================ */
 const easeOut = k => 1 - Math.pow(1 - k, 3);
  
+// 畫面靜止時（沒有劈砍特效、手沒在移動、沒有眨眼變化）就不重畫主畫布，省下大量效能
+let staticDrawn = false, lastDrawnIdx = -1, lastDrawnEye = -1;
+function trailMoving(now) {
+  if (now - handSeen > 300 || trail.length < 2) return false;
+  const a = trail[0], b = trail[trail.length - 1];
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) > 1;
+}
 function render(now) {
   clearCursorLayer();
+  // 游標（最上層圖層）每格都畫
+  if (now - handSeen < 140) drawCursor(hx, hy, false);
+  const busy = flash > 0.01 || shake > 0.3 || chips.length || slashes.length || ghosts.length || rings.length || impact || trailMoving(now);
+  if (!busy && staticDrawn && idx === lastDrawnIdx && curEyeIdx === lastDrawnEye) return;
+  staticDrawn = !busy; lastDrawnIdx = idx; lastDrawnEye = curEyeIdx;
+ 
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.globalCompositeOperation = 'source-over';
   ctx.clearRect(0, 0, W, H);
@@ -1064,14 +1103,15 @@ function render(now) {
     ctx.fillRect(0, 0, W, H);
   }
  
-  ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake);
+  // 震動：位移取整數像素，避免大圖每格都要重新取樣
+  if (shake > 0.3) ctx.translate(Math.round((Math.random() - .5) * shake * DPR) / DPR, Math.round((Math.random() - .5) * shake * DPR) / DPR);
  
   drawGhosts(now);
  
   if (STAGE_IMAGES.length) {
     const curImg = curEyeIdx === 0 ? STAGE_IMAGES[idx].open : STAGE_IMAGES[idx].closed;
-    const box = imageBox(curImg);
-    ctx.drawImage(curImg, box.x, box.y, box.w, box.h);
+    const c = scaledImage(curImg);
+    ctx.drawImage(c, c.dx, c.dy, c.dw, c.dh);
   }
  
   drawChips();
@@ -1094,7 +1134,8 @@ function drawGhosts(now) {
       ctx.translate(0, side * shift);
       ctx.rotate(-ang); ctx.translate(-g.cx, -g.cy);
       ctx.globalAlpha = alpha;
-      ctx.drawImage(g.img, g.box.x, g.box.y, g.box.w, g.box.h);
+      const sc = scaledImage(g.img);
+      ctx.drawImage(sc, sc.dx, sc.dy, sc.dw, sc.dh);
       ctx.globalAlpha = 1;
       ctx.restore();
     }
@@ -1169,8 +1210,6 @@ function drawHand(now) {
     ctx.lineWidth = 2 + 12 * k;
     ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
   }
-  // 發光的橘黃色游標與白色中心點（畫在最上層的游標圖層，會蓋過按鈕）
-  if (now - handSeen < 140) drawCursor(hx, hy, false);
 }
  
 /* ============================================================
@@ -1286,7 +1325,7 @@ function begin() {
 function removeBackground(img) {
   // 原圖很大（例如 3508×2481）時先縮小再處理，避免畫面卡住；2000px 在 Retina 螢幕上也夠清楚
   const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
-  const sc = Math.min(1, (IS_TOUCH ? 1400 : 2000) / Math.max(iw, ih));
+  const sc = Math.min(1, 2000 / Math.max(iw, ih));
   const w = Math.round(iw * sc), h = Math.round(ih * sc);
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const x = c.getContext('2d', { willReadFrequently: true });
@@ -1404,6 +1443,8 @@ function loadImg(src) {
   }
   #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 1 !important; }
   #pv canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  /* 平板／手機：視訊窗縮小一些 */
+  .touch #pv { width: 176px; height: 132px; bottom: 20px; left: 20px; }
  
   .header-bar {
     position: fixed; top: 0; left: 0; right: 0; z-index: 10;
@@ -1482,9 +1523,10 @@ const HEADER_OFFSET = 40; // 字的位置往下移，避開上方工具列
  
 const $ = s => document.querySelector(s);
  
-/* 效能：平板／手機（觸控裝置，含 iPad）效能較弱，降低畫布解析度、圖片處理尺寸，並在偵測變慢時自動放慢偵測頻率 */
+/* 效能：偵測變慢時自動放慢偵測頻率；平板／手機（觸控裝置，含 iPad）的視訊窗稍微縮小 */
 const IS_TOUCH = matchMedia('(pointer: coarse)').matches || /iPad|iPhone|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints || 0) > 1);
-const MAX_DPR = IS_TOUCH ? 1.25 : 2;
+const MAX_DPR = 2;
+if (IS_TOUCH) document.documentElement.classList.add('touch');
 let lastDetectT = 0, detectAvg = 0, detectGap = 0;
 const canvas = $('#stage'), ctx = canvas.getContext('2d');
 const video = $('#cam'), dots = $('#dots'), dctx = dots.getContext('2d');
@@ -1870,7 +1912,9 @@ function drawGlyph(o, blur, alpha, scale) {
   for (let i = 1; i < BLUR_LEVELS.length; i++) if (Math.abs(BLUR_LEVELS[i] - blur) < Math.abs(BLUR_LEVELS[k] - blur)) k = i;
   const size = spriteSize * scale;
   ctx.globalAlpha = alpha;
-  ctx.drawImage(list[k], o.x - size / 2, o.y - size / 2, size, size);
+  // 位置對齊螢幕像素：大小不變時就是 1:1 直接貼圖，速度最快也最清楚
+  const px = Math.round((o.x - size / 2) * DPR) / DPR, py = Math.round((o.y - size / 2) * DPR) / DPR;
+  ctx.drawImage(list[k], px, py, size, size);
   ctx.globalAlpha = 1;
 }
  
@@ -1885,7 +1929,7 @@ function render(now) {
     ctx.fillRect(0, 0, W, H);
   }
   ctx.save();
-  ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake);
+  if (shake > 0.3) ctx.translate(Math.round((Math.random() - .5) * shake * DPR) / DPR, Math.round((Math.random() - .5) * shake * DPR) / DPR);
  
   // 日、月：接近合成時逐漸模糊淡出
   let blur = 0, dimAlpha = 1;
@@ -2060,6 +2104,8 @@ async function initCamera() {
   }
   #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 1 !important; }
   #pv canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  /* 平板／手機：視訊窗縮小一些 */
+  .touch #pv { width: 176px; height: 132px; bottom: 20px; left: 20px; }
  
   .header-bar {
     position: fixed; top: 0; left: 0; right: 0; z-index: 10;
@@ -2141,9 +2187,10 @@ const HEADER_OFFSET = 40;    // 字的位置往下移，避開上方工具列
  
 const $ = s => document.querySelector(s);
  
-/* 效能：平板／手機（觸控裝置，含 iPad）效能較弱，降低畫布解析度、圖片處理尺寸，並在偵測變慢時自動放慢偵測頻率 */
+/* 效能：偵測變慢時自動放慢偵測頻率；平板／手機（觸控裝置，含 iPad）的視訊窗稍微縮小 */
 const IS_TOUCH = matchMedia('(pointer: coarse)').matches || /iPad|iPhone|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints || 0) > 1);
-const MAX_DPR = IS_TOUCH ? 1.25 : 2;
+const MAX_DPR = 2;
+if (IS_TOUCH) document.documentElement.classList.add('touch');
 let lastDetectT = 0, detectAvg = 0, detectGap = 0;
 const canvas = $('#stage'), ctx = canvas.getContext('2d');
 const video = $('#cam'), dots = $('#dots'), dctx = dots.getContext('2d');
@@ -2614,6 +2661,9 @@ async function initCamera() {
  
     <!-- 主程式腳本 -->
     <script>
+        // 平板／手機（觸控裝置，含 iPad）
+        const IS_TOUCH = matchMedia('(pointer: coarse)').matches || /iPad|iPhone|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints || 0) > 1);
+        if (IS_TOUCH) document.documentElement.classList.add('touch');   // 用來把視訊窗縮小一些
         const videoElement = document.getElementsByClassName('input_video')[0];
         const canvasElement = document.getElementsByClassName('output_canvas')[0];
         const canvasCtx = canvasElement.getContext('2d');
@@ -2877,7 +2927,6 @@ async function initCamera() {
         }});
         
         // 平板／手機效能較弱：改用較輕量的手部模型
-        const IS_TOUCH = matchMedia('(pointer: coarse)').matches || /iPad|iPhone|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints || 0) > 1);
         hands.setOptions({
             maxNumHands: 2,
             modelComplexity: IS_TOUCH ? 0 : 1,
