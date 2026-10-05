@@ -235,6 +235,11 @@ const GRID       = 64;           // 計算刷滿程度用的格子數
 const HEADER_OFFSET = 60;   // 往下移，留空間給工具列、五個字的切換鈕與黃色小手
  
 const $ = s => document.querySelector(s);
+ 
+/* 效能：平板／手機（觸控裝置，含 iPad）效能較弱，降低畫布解析度、圖片處理尺寸，並在偵測變慢時自動放慢偵測頻率 */
+const IS_TOUCH = matchMedia('(pointer: coarse)').matches || /iPad|iPhone|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints || 0) > 1);
+const MAX_DPR = IS_TOUCH ? 1.25 : 2;
+let lastDetectT = 0, detectAvg = 0, detectGap = 0;
 const canvas = $('#stage'), ctx = canvas.getContext('2d');
 const video = $('#cam'), dots = $('#dots'), dctx = dots.getContext('2d');
 const hintEl = $('#handHint');
@@ -283,7 +288,7 @@ const boxLeft = () => glyphCenter().x - S / 2;
 const boxTop  = () => glyphCenter().y - S / 2;
  
 function layout() {
-  DPR = Math.min(2, window.devicePixelRatio || 1);
+  DPR = Math.min(MAX_DPR, window.devicePixelRatio || 1);
   W = innerWidth; H = innerHeight;
   canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
   curCanvas.width = canvas.width; curCanvas.height = canvas.height;
@@ -311,7 +316,7 @@ function imageRect(img) {
 function removeBackground(img) {
   // 原圖很大（例如 3508×2481）時先縮小再處理，避免畫面卡住；2000px 在 Retina 螢幕上也夠清楚
   const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
-  const sc = Math.min(1, 2000 / Math.max(iw, ih));
+  const sc = Math.min(1, (IS_TOUCH ? 1400 : 2000) / Math.max(iw, ih));
   const w = Math.round(iw * sc), h = Math.round(ih * sc);
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const x = c.getContext('2d', { willReadFrequently: true });
@@ -496,9 +501,14 @@ function smoothLandmarks(lm, tMs) {
 function detectHands() {
   if (!handLandmarker || !cameraOn || video.readyState < 2) return;
   if (video.currentTime === lastVideoTime) return;
+  if (performance.now() - lastDetectT < detectGap) return;   // 裝置較慢時跳過部分畫面，避免整個畫面卡住
   lastVideoTime = video.currentTime;
   let res;
-  try { res = handLandmarker.detectForVideo(video, performance.now()); } catch { return; }
+  const t0 = performance.now(); lastDetectT = t0;
+  try { res = handLandmarker.detectForVideo(video, t0); } catch { return; }
+  // 記錄每次偵測花多久：一次超過 25ms 時，自動拉開偵測間隔（最多約每秒 15 次），讓動畫保持順暢
+  detectAvg = detectAvg * 0.9 + (performance.now() - t0) * 0.1;
+  detectGap = detectAvg > 25 ? Math.min(66, detectAvg * 1.3) : 0;
   if (res.landmarks && res.landmarks.length) {
     const lm = res.landmarks[0];
     let x = 0, y = 0;
@@ -812,6 +822,11 @@ const CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[1,5],[5,6],[6,7],[7,8],[5,9],[9,10
    基本狀態
    ============================================================ */
 const $ = s => document.querySelector(s);
+ 
+/* 效能：平板／手機（觸控裝置，含 iPad）效能較弱，降低畫布解析度、圖片處理尺寸，並在偵測變慢時自動放慢偵測頻率 */
+const IS_TOUCH = matchMedia('(pointer: coarse)').matches || /iPad|iPhone|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints || 0) > 1);
+const MAX_DPR = IS_TOUCH ? 1.25 : 2;
+let lastDetectT = 0, detectAvg = 0, detectGap = 0;
 const canvas = $('#stage'), ctx = canvas.getContext('2d');
 const video = $('#cam'), dots = $('#dots'), dctx = dots.getContext('2d');
  
@@ -856,7 +871,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
    版面
    ============================================================ */
 function layout(first) {
-  DPR = Math.min(2, window.devicePixelRatio || 1);
+  DPR = Math.min(MAX_DPR, window.devicePixelRatio || 1);
   W = innerWidth; H = innerHeight;
   canvas.width = Math.round(W * DPR);
   canvas.height = Math.round(H * DPR);
@@ -970,9 +985,14 @@ function smoothLandmarks(lm, tMs) {
 function detectHands() {
   if (!handLandmarker || !cameraOn || video.readyState < 2) return;
   if (video.currentTime === lastVideoTime) return;
+  if (performance.now() - lastDetectT < detectGap) return;   // 裝置較慢時跳過部分畫面，避免整個畫面卡住
   lastVideoTime = video.currentTime;
   let res;
-  try { res = handLandmarker.detectForVideo(video, performance.now()); } catch { return; }
+  const t0 = performance.now(); lastDetectT = t0;
+  try { res = handLandmarker.detectForVideo(video, t0); } catch { return; }
+  // 記錄每次偵測花多久：一次超過 25ms 時，自動拉開偵測間隔（最多約每秒 15 次），讓動畫保持順暢
+  detectAvg = detectAvg * 0.9 + (performance.now() - t0) * 0.1;
+  detectGap = detectAvg > 25 ? Math.min(66, detectAvg * 1.3) : 0;
  
   if (res.landmarks && res.landmarks.length) {
     const lm = res.landmarks[0];
@@ -1266,7 +1286,7 @@ function begin() {
 function removeBackground(img) {
   // 原圖很大（例如 3508×2481）時先縮小再處理，避免畫面卡住；2000px 在 Retina 螢幕上也夠清楚
   const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
-  const sc = Math.min(1, 2000 / Math.max(iw, ih));
+  const sc = Math.min(1, (IS_TOUCH ? 1400 : 2000) / Math.max(iw, ih));
   const w = Math.round(iw * sc), h = Math.round(ih * sc);
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const x = c.getContext('2d', { willReadFrequently: true });
@@ -1461,6 +1481,11 @@ const SPLIT_COOLDOWN = 500;
 const HEADER_OFFSET = 40; // 字的位置往下移，避開上方工具列
  
 const $ = s => document.querySelector(s);
+ 
+/* 效能：平板／手機（觸控裝置，含 iPad）效能較弱，降低畫布解析度、圖片處理尺寸，並在偵測變慢時自動放慢偵測頻率 */
+const IS_TOUCH = matchMedia('(pointer: coarse)').matches || /iPad|iPhone|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints || 0) > 1);
+const MAX_DPR = IS_TOUCH ? 1.25 : 2;
+let lastDetectT = 0, detectAvg = 0, detectGap = 0;
 const canvas = $('#stage'), ctx = canvas.getContext('2d');
 const video = $('#cam'), dots = $('#dots'), dctx = dots.getContext('2d');
  
@@ -1509,7 +1534,7 @@ function homePositions() {
 }
  
 function layout() {
-  DPR = Math.min(2, window.devicePixelRatio || 1);
+  DPR = Math.min(MAX_DPR, window.devicePixelRatio || 1);
   W = innerWidth; H = innerHeight;
   canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
   sizeCursorLayer();
@@ -1682,9 +1707,14 @@ function maybeGrabSplit(slot) {
 function detectHands() {
   if (!handLandmarker || !cameraOn || video.readyState < 2) return;
   if (video.currentTime === lastVideoTime) return;
+  if (performance.now() - lastDetectT < detectGap) return;   // 裝置較慢時跳過部分畫面，避免整個畫面卡住
   lastVideoTime = video.currentTime;
   let res;
-  try { res = handLandmarker.detectForVideo(video, performance.now()); } catch { return; }
+  const t0 = performance.now(); lastDetectT = t0;
+  try { res = handLandmarker.detectForVideo(video, t0); } catch { return; }
+  // 記錄每次偵測花多久：一次超過 25ms 時，自動拉開偵測間隔（最多約每秒 15 次），讓動畫保持順暢
+  detectAvg = detectAvg * 0.9 + (performance.now() - t0) * 0.1;
+  detectGap = detectAvg > 25 ? Math.min(66, detectAvg * 1.3) : 0;
  
   const hands = res.landmarks || [];
   const now = performance.now();
@@ -2110,6 +2140,11 @@ const REVERT_T      = 380;   // 笑→哭 的收回動畫時間
 const HEADER_OFFSET = 40;    // 字的位置往下移，避開上方工具列
  
 const $ = s => document.querySelector(s);
+ 
+/* 效能：平板／手機（觸控裝置，含 iPad）效能較弱，降低畫布解析度、圖片處理尺寸，並在偵測變慢時自動放慢偵測頻率 */
+const IS_TOUCH = matchMedia('(pointer: coarse)').matches || /iPad|iPhone|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints || 0) > 1);
+const MAX_DPR = IS_TOUCH ? 1.25 : 2;
+let lastDetectT = 0, detectAvg = 0, detectGap = 0;
 const canvas = $('#stage'), ctx = canvas.getContext('2d');
 const video = $('#cam'), dots = $('#dots'), dctx = dots.getContext('2d');
  
@@ -2154,7 +2189,7 @@ let flash = 0, shake = 0;
 let nextTear = 0, nextTwinkle = 0;
  
 function layout() {
-  DPR = Math.min(2, window.devicePixelRatio || 1);
+  DPR = Math.min(MAX_DPR, window.devicePixelRatio || 1);
   W = innerWidth; H = innerHeight;
   canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
   sizeCursorLayer();
@@ -2265,9 +2300,14 @@ function smoothLandmarks(lm, tMs) {
 function detectHands() {
   if (!handLandmarker || !cameraOn || video.readyState < 2) return;
   if (video.currentTime === lastVideoTime) return;
+  if (performance.now() - lastDetectT < detectGap) return;   // 裝置較慢時跳過部分畫面，避免整個畫面卡住
   lastVideoTime = video.currentTime;
   let res;
-  try { res = handLandmarker.detectForVideo(video, performance.now()); } catch { return; }
+  const t0 = performance.now(); lastDetectT = t0;
+  try { res = handLandmarker.detectForVideo(video, t0); } catch { return; }
+  // 記錄每次偵測花多久：一次超過 25ms 時，自動拉開偵測間隔（最多約每秒 15 次），讓動畫保持順暢
+  detectAvg = detectAvg * 0.9 + (performance.now() - t0) * 0.1;
+  detectGap = detectAvg > 25 ? Math.min(66, detectAvg * 1.3) : 0;
  
   if (res.landmarks && res.landmarks.length) {
     const lm = res.landmarks[0];
@@ -2836,9 +2876,11 @@ async function initCamera() {
             return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
         }});
         
+        // 平板／手機效能較弱：改用較輕量的手部模型
+        const IS_TOUCH = matchMedia('(pointer: coarse)').matches || /iPad|iPhone|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints || 0) > 1);
         hands.setOptions({
             maxNumHands: 2,
-            modelComplexity: 1,
+            modelComplexity: IS_TOUCH ? 0 : 1,
             minDetectionConfidence: 0.5,
             minTrackingConfidence: 0.5
         });
