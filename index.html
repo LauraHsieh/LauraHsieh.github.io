@@ -6,7 +6,6 @@
     <title>動滋·動字 - 選擇關卡</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
  
@@ -41,6 +40,7 @@
             box-shadow: 0 8px 16px rgba(0,0,0,0.2); transform: scaleX(-1); z-index: 100;
         }
         .input_video, .output_canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+        .input_video { opacity: 0; }  /* 鏡頭畫面不顯示，只留黑底白骨架 */
     </style>
 </head>
 <body>
@@ -118,7 +118,8 @@
     background-color: #000; border-radius: 16px; overflow: hidden;
     box-shadow: 0 8px 16px rgba(0,0,0,0.2); z-index: 100;
   }
-  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  /* 不顯示鏡頭畫面（黑底），只留白色手部骨架；video 仍在背景運作供手部偵測使用 */
+  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0 !important; }
   #pv canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
  
   /* 上方工具列（與其他關卡相同） */
@@ -222,6 +223,10 @@ const FONT = '"Noto Sans TC","PingFang TC","Microsoft JhengHei","Heiti TC",sans-
 const CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[1,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
                      [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
 const CHARS = ['刷', '揮', '塗', '抹', '擦'];
+// 「刷」改用角色圖片（放在 tree-game 資料夾）；其他字仍用文字
+const CHAR_IMAGES = { '刷': './tree-game/刷.png' };
+const charImgs = {};   // 載入並去背、裁掉空白邊後的圖片
+const outlineC = document.createElement('canvas'), octx = outlineC.getContext('2d');   // 圖片字的外框線
  
 const GREEN      = '60,220,90';  // 亮綠色
 const BASE_COLOR = '#e2e2e2';    // 還沒刷到的字（無邊框，淺灰）
@@ -296,6 +301,58 @@ function layout() {
 let resizeTimer = 0;
 addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(layout, 150); });
  
+// 把圖片等比例放進字的區域（S × S 的正中央）
+function imageRect(img) {
+  const box = glyphSize * 1.05;
+  const sc = Math.min(box / img.width, box / img.height);
+  const w = img.width * sc, h = img.height * sc;
+  return { x: (S - w) / 2, y: (S - h) / 2, w, h };
+}
+ 
+// 去背：從圖片四邊往內找「白色或透明」的背景並變成透明（字裡面的白色眼睛等不受影響），回傳去背後的畫布與角色範圍
+function removeBackground(img) {
+  // 原圖很大（例如 3508×2481）時先縮小再處理，避免畫面卡住；2000px 在 Retina 螢幕上也夠清楚
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  const sc = Math.min(1, 2000 / Math.max(iw, ih));
+  const w = Math.round(iw * sc), h = Math.round(ih * sc);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.drawImage(img, 0, 0, w, h);
+  const id = x.getImageData(0, 0, w, h), d = id.data;   // 用 file:// 開啟時這裡可能讀不到像素而丟出錯誤
+  const isBg = k => { const i = k * 4; return d[i + 3] < 30 || (d[i] > 225 && d[i + 1] > 225 && d[i + 2] > 225); };
+  const bg = new Uint8Array(w * h), stack = new Int32Array(w * h); let sp = 0;
+  const push = k => { if (!bg[k] && isBg(k)) { bg[k] = 1; stack[sp++] = k; } };
+  for (let xx = 0; xx < w; xx++) { push(xx); push((h - 1) * w + xx); }
+  for (let y = 0; y < h; y++) { push(y * w); push(y * w + w - 1); }
+  while (sp) {
+    const k = stack[--sp], px = k % w;
+    if (px > 0) push(k - 1); if (px < w - 1) push(k + 1);
+    if (k >= w) push(k - w); if (k < w * (h - 1)) push(k + w);
+  }
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let k = 0; k < w * h; k++) {
+    if (bg[k]) { d[k * 4 + 3] = 0; continue; }
+    const px = k % w, py = (k - px) / w;
+    if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
+  }
+  x.putImageData(id, 0, 0);
+  return { canvas: c, box: x1 < 0 ? { x0: 0, y0: 0, x1: w - 1, y1: h - 1 } : { x0, y0, x1, y1 } };
+}
+// 依範圍裁切，並補上 naturalWidth / naturalHeight，讓其餘程式可以把它當圖片用
+function cropCanvas(c, box, pad = 4) {
+  const sx = Math.max(0, box.x0 - pad), sy = Math.max(0, box.y0 - pad);
+  const out = document.createElement('canvas');
+  out.width = Math.min(c.width, box.x1 + pad + 1) - sx; out.height = Math.min(c.height, box.y1 + pad + 1) - sy;
+  out.getContext('2d').drawImage(c, sx, sy, out.width, out.height, 0, 0, out.width, out.height);
+  out.naturalWidth = out.width; out.naturalHeight = out.height;
+  return out;
+}
+// 去背並裁掉四周空白；讀不到像素時就用原圖
+function prepareImage(img) {
+  try { const r = removeBackground(img); return cropCanvas(r.canvas, r.box); }
+  catch (err) { console.warn('無法讀取圖片像素（請用 Live Server 開啟）：', err); return img; }
+}
+ 
 function drawGlyphText(c2d, color) {
   c2d.font = `900 ${glyphSize}px ${FONT}`;
   c2d.textAlign = 'center'; c2d.textBaseline = 'middle';
@@ -309,16 +366,46 @@ function setupChar(i) {
   dotEls.forEach((d, k) => { d.classList.toggle('active', k === ci); d.classList.toggle('done', doneSet.has(k)); });
  
   mctx.setTransform(DPR, 0, 0, DPR, 0, 0); mctx.clearRect(0, 0, S, S);
-  drawGlyphText(mctx, '#000');
+  const img = charImgs[CHARS[ci]];
+  if (img) {
+    // 圖片字：範圍＝整個角色（去背後的形狀）
+    const r = imageRect(img);
+    mctx.drawImage(img, r.x, r.y, r.w, r.h);
+    // 外框線：把角色形狀往四周擴張一點塗成深灰，再挖掉角色本身，只留下一圈線
+    outlineC.width = outlineC.height = maskC.width;
+    octx.setTransform(DPR, 0, 0, DPR, 0, 0); octx.clearRect(0, 0, S, S);
+    const lw = Math.max(2, glyphSize * 0.012);
+    for (let k = 0; k < 16; k++) {
+      const a = k / 16 * Math.PI * 2;
+      octx.drawImage(img, r.x + Math.cos(a) * lw, r.y + Math.sin(a) * lw, r.w, r.h);
+    }
+    octx.globalCompositeOperation = 'source-in';
+    octx.fillStyle = '#333333'; octx.fillRect(0, 0, S, S);
+    octx.globalCompositeOperation = 'destination-out';
+    octx.drawImage(img, r.x, r.y, r.w, r.h);
+    octx.globalCompositeOperation = 'source-over';
+  } else {
+    drawGlyphText(mctx, '#000');
+  }
   pctx.setTransform(DPR, 0, 0, DPR, 0, 0); pctx.clearRect(0, 0, S, S);
  
   // 低解析度格子：記錄哪些格子在字裡面，以及每格被刷了多少
   const g = document.createElement('canvas'); g.width = g.height = GRID;
   const gx = g.getContext('2d');
   gx.drawImage(maskC, 0, 0, GRID, GRID);
-  const data = gx.getImageData(0, 0, GRID, GRID).data;
   cellIn = new Uint8Array(GRID * GRID); cellAmt = new Float32Array(GRID * GRID); cellCount = 0;
-  for (let k = 0; k < GRID * GRID; k++) if (data[k * 4 + 3] > 100) { cellIn[k] = 1; cellCount++; }
+  try {
+    const data = gx.getImageData(0, 0, GRID, GRID).data;
+    for (let k = 0; k < GRID * GRID; k++) if (data[k * 4 + 3] > 100) { cellIn[k] = 1; cellCount++; }
+  } catch {
+    // 讀不到像素時：把字所在的矩形範圍都算進去
+    const r = img ? imageRect(img) : { x: (S - glyphSize) / 2, y: (S - glyphSize) / 2, w: glyphSize, h: glyphSize };
+    const cp = S / GRID;
+    for (let gy = 0; gy < GRID; gy++) for (let gxx = 0; gxx < GRID; gxx++) {
+      const cx = (gxx + 0.5) * cp, cy = (gy + 0.5) * cp;
+      if (cx > r.x && cx < r.x + r.w && cy > r.y && cy < r.y + r.h) { cellIn[gy * GRID + gxx] = 1; cellCount++; }
+    }
+  }
   cellCount = Math.max(1, cellCount);
   coverage = 0; done = false; doneT = 0; sparks.length = 0; autoNextAt = 0;
   hintEl.style.opacity = '1';
@@ -486,8 +573,9 @@ function render(now) {
   ctx.save();
   ctx.translate(ox + S / 2, oy + S / 2); ctx.scale(sc, sc); ctx.translate(-S / 2, -S / 2);
  
-  // 1. 還沒刷到的字：淺灰、無邊框
-  drawGlyphText(ctx, BASE_COLOR);
+  // 1. 還沒刷到的字：圖片字只畫外框線（簍空）；文字則是淺灰、無邊框
+  const baseImg = charImgs[CHARS[ci]];
+  if (!baseImg) drawGlyphText(ctx, BASE_COLOR);
  
   // 2. 刷上的亮綠色（只留在字的形狀內）；完成時把剩下的補滿
   tctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -500,10 +588,18 @@ function render(now) {
     tctx.fillRect(0, 0, tmpC.width, tmpC.height);
     tctx.globalAlpha = 1;
   }
-  tctx.globalCompositeOperation = 'destination-in';
-  tctx.drawImage(maskC, 0, 0);
+  if (baseImg) {
+    // 圖片字：刷到的地方慢慢顯示出圖片原本的顏色
+    const r = imageRect(baseImg);
+    tctx.globalCompositeOperation = 'source-in';
+    tctx.drawImage(baseImg, r.x * DPR, r.y * DPR, r.w * DPR, r.h * DPR);
+  } else {
+    tctx.globalCompositeOperation = 'destination-in';
+    tctx.drawImage(maskC, 0, 0);
+  }
   tctx.globalCompositeOperation = 'source-over';
   ctx.drawImage(tmpC, 0, 0, S, S);
+  if (baseImg) ctx.drawImage(outlineC, 0, 0, S, S);   // 外框線畫在最上面
   ctx.restore();
  
   // 3. 完成時的火花
@@ -523,8 +619,7 @@ function render(now) {
 /* ============================================================
    回選關：按「選關」，或手部游標停在「選關」上 0.5 秒
    ============================================================ */
-let leaving = false, backHoverStart = 0;
-const backBtn = $('#btnBack');
+let leaving = false;
 function goBackToMenu() {
   if (leaving) return;
   leaving = true;
@@ -573,8 +668,16 @@ async function initHands() {
   try { handLandmarker = await HandLandmarker.createFromOptions(fileset, opts('GPU')); }
   catch { handLandmarker = await HandLandmarker.createFromOptions(fileset, opts('CPU')); }
 }
+function getSharedStream() {
+  try {
+    const st = window.parent && window.parent !== window && window.parent.getCameraStream && window.parent.getCameraStream();
+    return st && st.active ? st : null;
+  } catch { return null; }
+}
 async function initCamera() {
-  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false });
+  // 優先沿用選關畫面已經開啟的鏡頭，進入每個關卡時就不會再跳出「允許使用相機」的詢問
+  const shared = getSharedStream();
+  const stream = shared || await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false });
   video.srcObject = stream;
   await video.play();
   cameraOn = true;
@@ -583,6 +686,13 @@ async function initCamera() {
 (async () => {
   layout();
   requestAnimationFrame(frame);
+  // 載入「刷」等角色圖片，載入完成後換上（還沒開始刷時才重建）
+  for (const [ch, src] of Object.entries(CHAR_IMAGES)) {
+    const im = new Image();
+    im.onload = () => { charImgs[ch] = prepareImage(im); if (CHARS[ci] === ch && coverage === 0) setupChar(ci); };
+    im.onerror = () => console.error('找不到圖片：' + src + '（請放在 tree-game 資料夾）');
+    im.src = src;
+  }
   // 字型下載完成後重新產生字形（保留目前進度會不準，所以只在還沒開始刷時重建）
   document.fonts.load(`900 100px "Noto Sans TC"`, CHARS.join('')).then(() => { if (coverage === 0) setupChar(ci); }).catch(() => {});
   try { await initHands(); await initCamera(); }
@@ -611,9 +721,6 @@ async function initCamera() {
   /* 手部游標專用圖層：疊在工具列與按鈕之上，不擋滑鼠點擊 */
   #cursor { position: fixed; inset: 0; width: 100%; height: 100%; display: block; z-index: 150; pointer-events: none; }
  
-  /* 隱藏舊版不需要的 UI 元素 */
-  .vignette, .brand, #caption, #hint, .ctrl, #start { display: none !important; }
- 
   /* === 更新：縮小 10% === */
   #pv {
     position: fixed; bottom: 30px; left: 30px;
@@ -622,7 +729,8 @@ async function initCamera() {
     box-shadow: 0 8px 16px rgba(0,0,0,0.2); z-index: 100;
     display: block !important;
   }
-  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 1 !important; }
+  /* 不顯示鏡頭畫面（黑底），只留白色手部骨架；video 仍在背景運作供手部偵測使用 */
+  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0 !important; }
   #pv canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
  
   .header-bar {
@@ -674,7 +782,6 @@ async function initCamera() {
 <canvas id="stage"></canvas>
 <canvas id="cursor"></canvas>
 <div id="pv"><video id="cam" playsinline muted></video><canvas id="dots" width="176" height="132"></canvas></div>
-<div id="caption"></div><div id="hint"></div><div id="status"></div><div id="msg"></div>
  
 <script type="module">
 /* ============================================================
@@ -687,18 +794,16 @@ const MP_BUNDLE  = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VE
 const MP_WASM    = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`;
 const MP_MODEL   = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
  
-const IMG_SEN_OPEN   = "./tree-game/森睜眼.png";
-const IMG_SEN_CLOSED = "./tree-game/森閉眼.png";
-const IMG_LIN_OPEN   = "./tree-game/林睜眼.png";
-const IMG_LIN_CLOSED = "./tree-game/林閉眼.png";
-const IMG_MU_OPEN    = "./tree-game/木睜眼.png";
-const IMG_MU_CLOSED  = "./tree-game/木閉眼.png";
+// 森、林、木改用新圖片（睜眼、閉眼都用同一張）
+const IMG_SEN_OPEN   = "./tree-game/森1005.png";
+const IMG_SEN_CLOSED = "./tree-game/森1005.png";
+const IMG_LIN_OPEN   = "./tree-game/林1005.png";
+const IMG_LIN_CLOSED = "./tree-game/林1005.png";
+const IMG_MU_OPEN    = "./tree-game/木1005.png";
+const IMG_MU_CLOSED  = "./tree-game/木1005.png";
  
 const STAGE_COUNT = 3;
-const CAPTIONS = ['三木成森', '二木成林', '一木獨立'];
  
-const STIFF_REST = 0.03;   // 粒子回到目標字形的彈力
-const DAMP       = 0.84;   // 阻尼
 const COOLDOWN   = 700;    // 每次砍完的冷卻時間 (ms)
 const BLINK_MIN  = 2600, BLINK_MAX = 5200;   // 眨眼間隔
 const BLINK_HOLD = 130;    // 閉眼維持多久 (ms)
@@ -712,7 +817,6 @@ const CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[1,5],[5,6],[6,7],[7,8],[5,9],[9,10
 const $ = s => document.querySelector(s);
 const canvas = $('#stage'), ctx = canvas.getContext('2d');
 const video = $('#cam'), dots = $('#dots'), dctx = dots.getContext('2d');
-const captionEl = $('#caption'), hintEl = $('#hint');
  
 /* 手部游標圖層（疊在「回選關」等按鈕之上） */
 const curCanvas = $('#cursor'), cctx = curCanvas.getContext('2d');
@@ -734,12 +838,9 @@ function drawCursor(x, y, big) {
   cctx.fillRect(x - rInner, y - rInner, rInner * 2, rInner * 2);
 }
  
-let W = 0, H = 0, DPR = 1, glyphSize = 400, psz = 3;
-let N = 0, px, py, vx, vy, tx, ty, ph, cR, cG, cB;
-let targets = [[null,null],[null,null],[null,null]];
-let targetColors = [[null,null],[null,null],[null,null]];
+let W = 0, H = 0, DPR = 1, glyphSize = 400;
 let STAGE_IMAGES = [];
-let idx = 0, curEyeIdx = 0, stiff = 0.004;
+let idx = 0, curEyeIdx = 0;
 let sens = 0.85;
 let lastChop = -1e9;
 let samples = [], trail = [], unitEMA = 0;
@@ -750,13 +851,12 @@ let nextBlink = 0, blinkUntil = 0;
  
 const slashes = [], ghosts = [], chips = [], rings = [];
 let flash = 0, shake = 0, impact = null;
-let captionTimer = 0;
  
 const rand = (a, b) => a + Math.random() * (b - a);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
  
 /* ============================================================
-   版面與粒子
+   版面
    ============================================================ */
 function layout(first) {
   DPR = Math.min(2, window.devicePixelRatio || 1);
@@ -765,9 +865,6 @@ function layout(first) {
   canvas.height = Math.round(H * DPR);
   sizeCursorLayer();
   glyphSize = Math.min(W * 0.8, H * 0.66);
-  // 用 file:// 直接開啟時，部分瀏覽器不允許讀取圖片像素（getImageData），
-  // 這時略過粒子目標計算，角色圖片與所有特效仍正常顯示
-  try { buildTargets(first); } catch (err) { console.warn('略過粒子目標計算：', err); }
 }
  
 function imageBox(img) {
@@ -775,96 +872,6 @@ function imageBox(img) {
   const w = img.naturalWidth * scale, h = img.naturalHeight * scale;
   // 往下偏移 50px，避開上方工具列（維持 Level 1 原本的版面位置）
   return { x: (W - w) / 2, y: (H - h) / 2 + 50, w, h };
-}
- 
-function buildTargets(first) {
-  const off = document.createElement('canvas');
-  off.width = W; off.height = H;
-  const o = off.getContext('2d', { willReadFrequently: true });
-  const step = Math.max(3, Math.round(glyphSize / 115));
-  psz = Math.max(1.7, step * 0.56);
- 
-  const variants = [];
-  for (let s = 0; s < STAGE_COUNT; s++) {
-    for (let e = 0; e < 2; e++) {
-      const img = e === 0 ? STAGE_IMAGES[s].open : STAGE_IMAGES[s].closed;
-      const box = imageBox(img);
-      o.clearRect(0, 0, W, H);
-      o.drawImage(img, box.x, box.y, box.w, box.h);
-      const data = o.getImageData(0, 0, W, H).data;
-      const pts = [], cols = [];
-      for (let y = 0; y < H; y += step) {
-        for (let x = 0; x < W; x += step) {
-          const di = (y * W + x) * 4;
-          if (data[di + 3] > 128) {
-            pts.push(x + (Math.random() - .5) * step * .8, y + (Math.random() - .5) * step * .8);
-            cols.push(data[di], data[di + 1], data[di + 2]);
-          }
-        }
-      }
-      variants.push({ s, e, pts, cols });
-    }
-  }
- 
-  const newN = Math.max(...variants.map(v => v.pts.length / 2));
-  const newTargets = [[null, null], [null, null], [null, null]];
-  const newColors  = [[null, null], [null, null], [null, null]];
-  for (const v of variants) {
-    const c = v.pts.length / 2;
-    const posArr = new Float32Array(newN * 2);
-    const colArr = new Uint8ClampedArray(newN * 3);
-    for (let i = 0; i < newN; i++) {
-      const k = i % c;
-      const wrap = i >= c ? step * 0.5 : 0;
-      posArr[2 * i]     = v.pts[2 * k]     + (wrap ? (Math.random() - .5) * wrap : 0);
-      posArr[2 * i + 1] = v.pts[2 * k + 1] + (wrap ? (Math.random() - .5) * wrap : 0);
-      colArr[3 * i]     = v.cols[3 * k];
-      colArr[3 * i + 1] = v.cols[3 * k + 1];
-      colArr[3 * i + 2] = v.cols[3 * k + 2];
-    }
-    newTargets[v.s][v.e] = posArr;
-    newColors[v.s][v.e]  = colArr;
-  }
-  targets = newTargets; targetColors = newColors;
- 
-  if (newN !== N) {
-    N = newN;
-    px = new Float32Array(N); py = new Float32Array(N);
-    vx = new Float32Array(N); vy = new Float32Array(N);
-    tx = new Float32Array(N); ty = new Float32Array(N);
-    ph = new Float32Array(N);
-    cR = new Uint8ClampedArray(N); cG = new Uint8ClampedArray(N); cB = new Uint8ClampedArray(N);
-    for (let i = 0; i < N; i++) ph[i] = Math.random() * Math.PI * 2;
-    applyTargets(0);
-    if (first) scatter(); else snapToTargets();
-  } else {
-    applyTargets(curEyeIdx);
-  }
-}
- 
-function applyTargets(eyeIdx) {
-  curEyeIdx = eyeIdx;
-  const t = targets[idx][eyeIdx];
-  const c = targetColors[idx][eyeIdx];
-  if (!t || !c) return;
-  for (let i = 0; i < N; i++) {
-    tx[i] = t[2 * i]; ty[i] = t[2 * i + 1];
-    cR[i] = c[3 * i]; cG[i] = c[3 * i + 1]; cB[i] = c[3 * i + 2];
-  }
-}
- 
-function snapToTargets() {
-  for (let i = 0; i < N; i++) { px[i] = tx[i]; py[i] = ty[i]; vx[i] = vy[i] = 0; }
-}
- 
-function scatter() {
-  const R = Math.max(W, H) * 0.7;
-  for (let i = 0; i < N; i++) {
-    const a = Math.random() * Math.PI * 2, r = R * (0.5 + Math.random() * 0.6);
-    px[i] = W / 2 + Math.cos(a) * r; py[i] = H / 2 + Math.sin(a) * r;
-    vx[i] = vy[i] = 0;
-  }
-  stiff = 0.004;
 }
  
 /* ============================================================
@@ -888,16 +895,6 @@ function chop(dx, dy, mx, my) {
   rings.push({ x: cx, y: cy, t0: now });
   impact = { x: cx, y: cy, t0: now };
  
-  const spread = glyphSize * 0.25;
-  for (let i = 0; i < N; i++) {
-    const s = (px[i] - cx) * nx + (py[i] - cy) * ny;
-    const side = s >= 0 ? 1 : -1;
-    const fall = 0.35 + 0.65 * Math.exp(-Math.abs(s) / spread);
-    const m = (18 + Math.random() * 26) * fall;
-    vx[i] += nx * side * m + dx * (Math.random() - 0.35) * 10 + (Math.random() - .5) * 7;
-    vy[i] += ny * side * m + dy * (Math.random() - 0.35) * 10 + (Math.random() - .5) * 7;
-  }
- 
   const tones = ['236,217,177', '240,169,74', '200,160,105', '147,196,125'];
   for (let j = 0; j < 130; j++) {
     const t = Math.random();
@@ -917,20 +914,11 @@ function chop(dx, dy, mx, my) {
   if (chips.length > 420) chips.splice(0, chips.length - 420);
  
   idx = (idx + 1) % STAGE_COUNT;
-  applyTargets(0);
-  stiff = 0.004;
+  curEyeIdx = 0;
   flash = 1; shake = 18;
-  setCaption(CAPTIONS[idx]);
-  hintEl.classList.add('gone');
  
   nextBlink = now + rand(1800, 3000);
   blinkUntil = 0;
-}
- 
-function setCaption(text) {
-  captionEl.classList.remove('show');
-  clearTimeout(captionTimer);
-  captionTimer = setTimeout(() => { captionEl.textContent = text; captionEl.classList.add('show'); }, 380);
 }
  
 /* ============================================================
@@ -1027,25 +1015,6 @@ function drawPreview(lm) {
    物理模擬
    ============================================================ */
 function update(f, now) {
-  stiff += (STIFF_REST - stiff) * Math.min(1, 0.05 * f);
-  const damp = Math.pow(DAMP, f);
-  const handOn = now - handSeen < 140;
-  const R = Math.max(70, glyphSize * 0.16), R2 = R * R;
- 
-  for (let i = 0; i < N; i++) {
-    vx[i] += (tx[i] - px[i]) * stiff * f;
-    vy[i] += (ty[i] - py[i]) * stiff * f;
-    if (handOn) {
-      const dx = px[i] - hx, dy = py[i] - hy, d2 = dx * dx + dy * dy;
-      if (d2 < R2 && d2 > 0.01) {
-        const d = Math.sqrt(d2), k = (1 - d / R) * 2.4 * f;
-        vx[i] += dx / d * k; vy[i] += dy / d * k;
-      }
-    }
-    vx[i] *= damp; vy[i] *= damp;
-    px[i] += vx[i] * f; py[i] += vy[i] * f;
-  }
- 
   for (let i = chips.length - 1; i >= 0; i--) {
     const c = chips[i];
     c.life += f * 16.7;
@@ -1057,8 +1026,8 @@ function update(f, now) {
   flash *= Math.pow(0.86, f);
   shake *= Math.pow(0.86, f);
  
-  if (blinkUntil === 0 && now >= nextBlink) { applyTargets(1); blinkUntil = now + BLINK_HOLD; }
-  else if (blinkUntil !== 0 && now >= blinkUntil) { applyTargets(0); blinkUntil = 0; nextBlink = now + rand(BLINK_MIN, BLINK_MAX); }
+  if (blinkUntil === 0 && now >= nextBlink) { curEyeIdx = 1; blinkUntil = now + BLINK_HOLD; }
+  else if (blinkUntil !== 0 && now >= blinkUntil) { curEyeIdx = 0; blinkUntil = 0; nextBlink = now + rand(BLINK_MIN, BLINK_MAX); }
 }
  
 /* ============================================================
@@ -1202,8 +1171,7 @@ function frame(now) {
 /* ============================================================
    回選關：按下按鈕，或手部游標停在「回選關」上 0.5 秒
    ============================================================ */
-let leaving = false, backHoverStart = 0;
-const backBtn = $('#btnBack');
+let leaving = false;
 function goBackToMenu() {
   if (leaving) return;
   leaving = true;
@@ -1273,8 +1241,16 @@ async function initHands() {
   catch { handLandmarker = await HandLandmarker.createFromOptions(fileset, opts('CPU')); }
 }
  
+function getSharedStream() {
+  try {
+    const st = window.parent && window.parent !== window && window.parent.getCameraStream && window.parent.getCameraStream();
+    return st && st.active ? st : null;
+  } catch { return null; }
+}
 async function initCamera() {
-  const stream = await navigator.mediaDevices.getUserMedia({
+  // 優先沿用選關畫面已經開啟的鏡頭，進入每個關卡時就不會再跳出「允許使用相機」的詢問
+  const shared = getSharedStream();
+  const stream = shared || await navigator.mediaDevices.getUserMedia({
     video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false
   });
   video.srcObject = stream;
@@ -1283,10 +1259,61 @@ async function initCamera() {
 }
  
 function begin() {
-  scatter(); idx = 0; applyTargets(0);
-  setCaption(CAPTIONS[0]);
+  idx = 0; curEyeIdx = 0;
   nextBlink = performance.now() + rand(1800, 3200);
   blinkUntil = 0;
+}
+ 
+// 去背：從圖片四邊往內找「白色或透明」的背景並變成透明（字裡面的白色眼睛等不受影響），回傳去背後的畫布與角色範圍
+function removeBackground(img) {
+  // 原圖很大（例如 3508×2481）時先縮小再處理，避免畫面卡住；2000px 在 Retina 螢幕上也夠清楚
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  const sc = Math.min(1, 2000 / Math.max(iw, ih));
+  const w = Math.round(iw * sc), h = Math.round(ih * sc);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.drawImage(img, 0, 0, w, h);
+  const id = x.getImageData(0, 0, w, h), d = id.data;   // 用 file:// 開啟時這裡可能讀不到像素而丟出錯誤
+  const isBg = k => { const i = k * 4; return d[i + 3] < 30 || (d[i] > 225 && d[i + 1] > 225 && d[i + 2] > 225); };
+  const bg = new Uint8Array(w * h), stack = new Int32Array(w * h); let sp = 0;
+  const push = k => { if (!bg[k] && isBg(k)) { bg[k] = 1; stack[sp++] = k; } };
+  for (let xx = 0; xx < w; xx++) { push(xx); push((h - 1) * w + xx); }
+  for (let y = 0; y < h; y++) { push(y * w); push(y * w + w - 1); }
+  while (sp) {
+    const k = stack[--sp], px = k % w;
+    if (px > 0) push(k - 1); if (px < w - 1) push(k + 1);
+    if (k >= w) push(k - w); if (k < w * (h - 1)) push(k + w);
+  }
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let k = 0; k < w * h; k++) {
+    if (bg[k]) { d[k * 4 + 3] = 0; continue; }
+    const px = k % w, py = (k - px) / w;
+    if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
+  }
+  x.putImageData(id, 0, 0);
+  return { canvas: c, box: x1 < 0 ? { x0: 0, y0: 0, x1: w - 1, y1: h - 1 } : { x0, y0, x1, y1 } };
+}
+// 依範圍裁切，並補上 naturalWidth / naturalHeight，讓其餘程式可以把它當圖片用
+function cropCanvas(c, box, pad = 4) {
+  const sx = Math.max(0, box.x0 - pad), sy = Math.max(0, box.y0 - pad);
+  const out = document.createElement('canvas');
+  out.width = Math.min(c.width, box.x1 + pad + 1) - sx; out.height = Math.min(c.height, box.y1 + pad + 1) - sy;
+  out.getContext('2d').drawImage(c, sx, sy, out.width, out.height, 0, 0, out.width, out.height);
+  out.naturalWidth = out.width; out.naturalHeight = out.height;
+  return out;
+}
+function prepareStageImages(list) {
+  try {
+    const rs = list.map(removeBackground);
+    const sameSize = rs.every(r => r.canvas.width === rs[0].canvas.width && r.canvas.height === rs[0].canvas.height);
+    if (!sameSize) return rs.map(r => cropCanvas(r.canvas, r.box));   // 畫布大小不同時，各自裁切
+    const u = { x0: Math.min(...rs.map(r => r.box.x0)), y0: Math.min(...rs.map(r => r.box.y0)),
+                x1: Math.max(...rs.map(r => r.box.x1)), y1: Math.max(...rs.map(r => r.box.y1)) };
+    return rs.map(r => cropCanvas(r.canvas, u));
+  } catch (err) {
+    console.warn('無法讀取圖片像素（請用 Live Server 開啟），使用原圖：', err);
+    return list;
+  }
 }
  
 function loadImg(src) {
@@ -1308,7 +1335,10 @@ function loadImg(src) {
       loadImg(IMG_LIN_OPEN), loadImg(IMG_LIN_CLOSED),
       loadImg(IMG_MU_OPEN),  loadImg(IMG_MU_CLOSED)
     ]);
-    STAGE_IMAGES = [{ open: so, closed: sc }, { open: lo, closed: lc }, { open: mo, closed: mc }];
+    // 三張圖去背後，用「同一個裁切框」裁掉四周空白：
+    // 森的大小剛好填滿畫面，林、木裡的每棵樹跟森裡的樹一樣大，三個字在畫面上的比例一致
+    const [sen, lin, mu] = prepareStageImages([so, lo, mo]);
+    STAGE_IMAGES = [{ open: sen, closed: sen }, { open: lin, closed: lin }, { open: mu, closed: mu }];
   } catch (err) {
     console.error('角色圖片載入失敗，請確認 tree-game 資料夾與 HTML 檔放在同一目錄。', err);
     return;
@@ -1346,9 +1376,6 @@ function loadImg(src) {
   /* 手部游標專用圖層：疊在工具列與按鈕之上，不擋滑鼠點擊 */
   #cursor { position: fixed; inset: 0; width: 100%; height: 100%; display: block; z-index: 150; pointer-events: none; }
  
-  /* 隱藏舊版不需要的 UI 元素 */
-  .vignette, .brand, #caption, #hint, .ctrl, #start { display: none !important; }
- 
   /* === 更新：縮小 10% === */
   #pv {
     position: fixed; bottom: 30px; left: 30px;
@@ -1357,7 +1384,8 @@ function loadImg(src) {
     box-shadow: 0 8px 16px rgba(0,0,0,0.2); z-index: 100;
     display: block !important;
   }
-  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 1 !important; }
+  /* 不顯示鏡頭畫面（黑底），只留白色手部骨架；video 仍在背景運作供手部偵測使用 */
+  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0 !important; }
   #pv canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
  
   .header-bar {
@@ -1885,8 +1913,7 @@ function drawHandCursor(slot) {
 /* ============================================================
    回選關：按下按鈕，或任一手部游標停在「回選關」上 0.5 秒
    ============================================================ */
-let leaving = false, backHoverStart = 0;
-const backBtn = $('#btnBack');
+let leaving = false;
 function goBackToMenu() {
   if (leaving) return;
   leaving = true;
@@ -1940,8 +1967,16 @@ async function initHands() {
   catch { handLandmarker = await HandLandmarker.createFromOptions(fileset, opts('CPU')); }
 }
  
+function getSharedStream() {
+  try {
+    const st = window.parent && window.parent !== window && window.parent.getCameraStream && window.parent.getCameraStream();
+    return st && st.active ? st : null;
+  } catch { return null; }
+}
 async function initCamera() {
-  const stream = await navigator.mediaDevices.getUserMedia({
+  // 優先沿用選關畫面已經開啟的鏡頭，進入每個關卡時就不會再跳出「允許使用相機」的詢問
+  const shared = getSharedStream();
+  const stream = shared || await navigator.mediaDevices.getUserMedia({
     video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false
   });
   video.srcObject = stream;
@@ -1988,9 +2023,6 @@ async function initCamera() {
   /* 手部游標專用圖層：疊在工具列與按鈕之上，不擋滑鼠點擊 */
   #cursor { position: fixed; inset: 0; width: 100%; height: 100%; display: block; z-index: 150; pointer-events: none; }
  
-  /* 隱藏舊版不需要的 UI 元素 */
-  .vignette, .brand, #caption, #hint, .ctrl, #start { display: none !important; }
- 
   /* === 更新：縮小 10% === */
   #pv {
     position: fixed; bottom: 30px; left: 30px;
@@ -1999,7 +2031,8 @@ async function initCamera() {
     box-shadow: 0 8px 16px rgba(0,0,0,0.2); z-index: 100;
     display: block !important;
   }
-  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 1 !important; }
+  /* 不顯示鏡頭畫面（黑底），只留白色手部骨架；video 仍在背景運作供手部偵測使用 */
+  #pv video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0 !important; }
   #pv canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
  
   .header-bar {
@@ -2451,8 +2484,7 @@ function render(now) {
 /* ============================================================
    回選關：按下按鈕，或手部游標停在「回選關」上 0.5 秒
    ============================================================ */
-let leaving = false, backHoverStart = 0;
-const backBtn = $('#btnBack');
+let leaving = false;
 function goBackToMenu() {
   if (leaving) return;
   leaving = true;
@@ -2506,8 +2538,16 @@ async function initHands() {
   catch { handLandmarker = await HandLandmarker.createFromOptions(fileset, opts('CPU')); }
 }
  
+function getSharedStream() {
+  try {
+    const st = window.parent && window.parent !== window && window.parent.getCameraStream && window.parent.getCameraStream();
+    return st && st.active ? st : null;
+  } catch { return null; }
+}
 async function initCamera() {
-  const stream = await navigator.mediaDevices.getUserMedia({
+  // 優先沿用選關畫面已經開啟的鏡頭，進入每個關卡時就不會再跳出「允許使用相機」的詢問
+  const shared = getSharedStream();
+  const stream = shared || await navigator.mediaDevices.getUserMedia({
     video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false
   });
   video.srcObject = stream;
@@ -2714,15 +2754,17 @@ async function initCamera() {
  
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            // 不顯示鏡頭畫面：黑底，只畫白色手部骨架
+            canvasCtx.fillStyle = '#000000';
+            canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
             
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                drawConnectors(canvasCtx, results.multiHandLandmarks[0], HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 4});
-                drawLandmarks(canvasCtx, results.multiHandLandmarks[0], {color: '#FF0000', lineWidth: 2, radius: 4});
+                drawConnectors(canvasCtx, results.multiHandLandmarks[0], HAND_CONNECTIONS, {color: '#FFFFFF', lineWidth: 3});
+                drawLandmarks(canvasCtx, results.multiHandLandmarks[0], {color: '#FFFFFF', fillColor: '#FFFFFF', lineWidth: 1, radius: 3});
                 
                 if (results.multiHandLandmarks.length > 1) {
-                    drawConnectors(canvasCtx, results.multiHandLandmarks[1], HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 4});
-                    drawLandmarks(canvasCtx, results.multiHandLandmarks[1], {color: '#FF0000', lineWidth: 2, radius: 4});
+                    drawConnectors(canvasCtx, results.multiHandLandmarks[1], HAND_CONNECTIONS, {color: '#FFFFFF', lineWidth: 3});
+                    drawLandmarks(canvasCtx, results.multiHandLandmarks[1], {color: '#FFFFFF', fillColor: '#FFFFFF', lineWidth: 1, radius: 3});
                 }
  
                 const hand1 = results.multiHandLandmarks[0];
@@ -2808,6 +2850,9 @@ async function initCamera() {
         });
         
         hands.onResults(onResults);
+ 
+        // 讓各關卡沿用這裡已開啟的鏡頭，不必每進一關就重新詢問相機權限
+        window.getCameraStream = () => videoElement.srcObject;
  
         const camera = new Camera(videoElement, {
             onFrame: async () => {
