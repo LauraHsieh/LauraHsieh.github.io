@@ -154,6 +154,14 @@
   }
   .char-tab.active { background: #444444; color: #ffffff; }
  
+  /* 中英說明（樣式與其他關卡相同），放在五個字切換鈕下方 */
+  .instruction-text {
+    position: fixed; top: 134px; left: 50%; transform: translateX(-50%);
+    font-size: 18px; color: #555; z-index: 10; pointer-events: none; letter-spacing: 1px;
+    text-align: center; width: max-content; max-width: 90vw;
+  }
+  .instruction-en { display: block; margin-top: 6px; font-size: 13px; color: #888; letter-spacing: 0.3px; }
+ 
   /* 字上方的黃色小手：左右擺動，提示「刷」的動作 */
   #handHint {
     position: fixed; z-index: 5; width: 40px; height: 56px; pointer-events: none;
@@ -190,6 +198,8 @@
   <button class="char-tab">抹</button>
   <button class="char-tab">擦</button>
 </div>
+ 
+<div class="instruction-text">用手在字上來回刷，把字刷滿顏色<span class="instruction-en">Brush your hand back and forth over the character to fill it with color</span></div>
  
 <svg id="handHint" viewBox="0 0 40 56" aria-hidden="true">
   <g fill="#fff34d">
@@ -236,7 +246,7 @@ const PER_PASS   = 0.3;          // 刷過一次大約上色 30%，來回刷幾�
 const MIN_SPEED  = 260;          // 手移動速度（px/秒）超過這個才算在「刷」，停著不動不會上色
 const DONE_AT    = 0.85;         // 刷滿 85% 後，剩下的自動補滿
 const GRID       = 64;           // 計算刷滿程度用的格子數
-const HEADER_OFFSET = 60;   // 往下移，留空間給工具列、五個字的切換鈕與黃色小手
+const HEADER_OFFSET = 90;   // 往下移，留空間給工具列、五個字的切換鈕與黃色小手
  
 const $ = s => document.querySelector(s);
  
@@ -303,7 +313,7 @@ function layout() {
   for (const c of [maskC, paintC, tmpC]) { c.width = c.height = Math.ceil(S * DPR); }
   // 黃色小手放在字的正上方
   hintEl.style.left = (W / 2) + 'px';
-  hintEl.style.top = Math.max(130, glyphCenter().y - glyphSize * 0.5 - 70) + 'px';
+  hintEl.style.top = Math.max(196, glyphCenter().y - glyphSize * 0.5 - 70) + 'px';
   setupChar(ci);
 }
 let resizeTimer = 0;
@@ -506,7 +516,8 @@ function smoothLandmarks(lm, tMs) {
 function detectHands() {
   if (!handLandmarker || !cameraOn || video.readyState < 2) return;
   if (video.currentTime === lastVideoTime) return;
-  if (performance.now() - lastDetectT < detectGap) return;   // 裝置較慢時跳過部分畫面，避免整個畫面卡住
+  // 只有平板／手機才限制偵測頻率（最多約每秒 22 次，偵測變慢時再自動放慢）；電腦版每一格都偵測，反應最即時
+  if (IS_TOUCH && performance.now() - lastDetectT < Math.max(45, detectGap)) return;
   lastVideoTime = video.currentTime;
   let res;
   const t0 = performance.now(); lastDetectT = t0;
@@ -636,6 +647,10 @@ let leaving = false;
 function goBackToMenu() {
   if (leaving) return;
   leaving = true;
+  // 釋放這一關的手部偵測模型與鏡頭畫面（鏡頭本身由選關畫面共用，不關閉）
+  try { if (handLandmarker) handLandmarker.close(); } catch {}
+  handLandmarker = null;
+  try { video.srcObject = null; } catch {}
   if (window.parent && window.parent !== window) window.parent.postMessage('back-to-menu', '*');
   else location.reload();
 }
@@ -662,6 +677,7 @@ function checkButtonHover(now, pts) {
    主迴圈與啟動
    ============================================================ */
 function frame(now) {
+  if (leaving) return;   // 已離開關卡：停止畫面迴圈
   if (autoNextAt && now >= autoNextAt) { demo = null; setupChar(ci + 1); }
   detectHands();
   runDemo(now);
@@ -767,6 +783,9 @@ async function initCamera() {
     position: fixed; top: 25%; left: 50%; transform: translateX(-50%);
     font-size: 18px; color: #555; z-index: 10; pointer-events: none; letter-spacing: 1px;
   }
+  /* 中文說明下方的英文說明（字比中文小） */
+  .instruction-text { text-align: center; width: max-content; max-width: 90vw; margin-top: -12px; }   /* 往上一點，留空間給英文 */
+  .instruction-en { display: block; margin-top: 6px; font-size: 13px; color: #888; letter-spacing: 0.3px; }
   .pagination {
     position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%);
     display: flex; gap: 12px; z-index: 10;
@@ -786,7 +805,7 @@ async function initCamera() {
   <button class="nav-btn btn-grey" id="btnBack" onclick="goBackToMenu()">回選關 →</button>
 </div>
  
-<div class="instruction-text">手腕向下劈過上方的「木」</div>
+<div class="instruction-text">手腕向下劈過上方的「木」<span class="instruction-en">Chop down through the “木” above with your wrist</span></div>
  
 <div class="pagination">
   <div class="dot active"></div>
@@ -886,6 +905,7 @@ function layout(first) {
   sizeCursorLayer();
   glyphSize = Math.min(W * 0.8, H * 0.66);
   scaledCache = new Map(); staticDrawn = false;
+  for (const st of STAGE_IMAGES) { scaledImage(st.open); scaledImage(st.closed); }   // 預先縮放好，劈的瞬間不會頓
 }
  
 // 依目前大小預先縮放好的角色圖（每格只要 1:1 貼上，不用每次縮放 2000px 的大圖）
@@ -1011,7 +1031,8 @@ function smoothLandmarks(lm, tMs) {
 function detectHands() {
   if (!handLandmarker || !cameraOn || video.readyState < 2) return;
   if (video.currentTime === lastVideoTime) return;
-  if (performance.now() - lastDetectT < detectGap) return;   // 裝置較慢時跳過部分畫面，避免整個畫面卡住
+  // 只有平板／手機才限制偵測頻率（最多約每秒 22 次，偵測變慢時再自動放慢）；電腦版每一格都偵測，反應最即時
+  if (IS_TOUCH && performance.now() - lastDetectT < Math.max(45, detectGap)) return;
   lastVideoTime = video.currentTime;
   let res;
   const t0 = performance.now(); lastDetectT = t0;
@@ -1217,6 +1238,7 @@ function drawHand(now) {
    ============================================================ */
 let last = performance.now();
 function frame(now) {
+  if (leaving) return;   // 已離開關卡：停止畫面迴圈
   const f = Math.min(2.5, (now - last) / 16.667); last = now;
   detectHands();
   update(f, now);
@@ -1232,6 +1254,10 @@ let leaving = false;
 function goBackToMenu() {
   if (leaving) return;
   leaving = true;
+  // 釋放這一關的手部偵測模型與鏡頭畫面（鏡頭本身由選關畫面共用，不關閉）
+  try { if (handLandmarker) handLandmarker.close(); } catch {}
+  handLandmarker = null;
+  try { video.srcObject = null; } catch {}
   if (window.parent && window.parent !== window) window.parent.postMessage('back-to-menu', '*');
   else location.reload();
 }
@@ -1466,6 +1492,9 @@ function loadImg(src) {
     position: fixed; top: 25%; left: 50%; transform: translateX(-50%);
     font-size: 18px; color: #555; z-index: 10; pointer-events: none; letter-spacing: 1px;
   }
+  /* 中文說明下方的英文說明（字比中文小） */
+  .instruction-text { text-align: center; width: max-content; max-width: 90vw; margin-top: -12px; }   /* 往上一點，留空間給英文 */
+  .instruction-en { display: block; margin-top: 6px; font-size: 13px; color: #888; letter-spacing: 0.3px; }
   .pagination {
     position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%);
     display: flex; gap: 12px; z-index: 10;
@@ -1484,7 +1513,7 @@ function loadImg(src) {
   <button class="nav-btn btn-grey" id="btnBack" onclick="goBackToMenu()">回選關 →</button>
 </div>
  
-<div class="instruction-text">雙手捏住「日」與「月」，靠在一起合成「明」</div>
+<div class="instruction-text">雙手捏住「日」與「月」，靠在一起合成「明」<span class="instruction-en">Pinch “日” and “月” with both hands, then bring them together to form “明”</span></div>
  
 <div class="pagination">
   <div class="dot active"></div>
@@ -1749,7 +1778,8 @@ function maybeGrabSplit(slot) {
 function detectHands() {
   if (!handLandmarker || !cameraOn || video.readyState < 2) return;
   if (video.currentTime === lastVideoTime) return;
-  if (performance.now() - lastDetectT < detectGap) return;   // 裝置較慢時跳過部分畫面，避免整個畫面卡住
+  // 只有平板／手機才限制偵測頻率（最多約每秒 22 次，偵測變慢時再自動放慢）；電腦版每一格都偵測，反應最即時
+  if (IS_TOUCH && performance.now() - lastDetectT < Math.max(45, detectGap)) return;
   lastVideoTime = video.currentTime;
   let res;
   const t0 = performance.now(); lastDetectT = t0;
@@ -1988,6 +2018,10 @@ let leaving = false;
 function goBackToMenu() {
   if (leaving) return;
   leaving = true;
+  // 釋放這一關的手部偵測模型與鏡頭畫面（鏡頭本身由選關畫面共用，不關閉）
+  try { if (handLandmarker) handLandmarker.close(); } catch {}
+  handLandmarker = null;
+  try { video.srcObject = null; } catch {}
   if (window.parent && window.parent !== window) window.parent.postMessage('back-to-menu', '*');
   else location.reload();
 }
@@ -2015,6 +2049,7 @@ function checkButtonHover(now, pts) {
    ============================================================ */
 let last = performance.now();
 function frame(now) {
+  if (leaving) return;   // 已離開關卡：停止畫面迴圈
   const f = Math.min(2.5, (now - last) / 16.667); last = now;
   detectHands();
   update(f, now);
@@ -2127,6 +2162,9 @@ async function initCamera() {
     position: fixed; top: 25%; left: 50%; transform: translateX(-50%);
     font-size: 18px; color: #555; z-index: 10; pointer-events: none; letter-spacing: 1px;
   }
+  /* 中文說明下方的英文說明（字比中文小） */
+  .instruction-text { text-align: center; width: max-content; max-width: 90vw; margin-top: -12px; }   /* 往上一點，留空間給英文 */
+  .instruction-en { display: block; margin-top: 6px; font-size: 13px; color: #888; letter-spacing: 0.3px; }
   .pagination {
     position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%);
     display: flex; gap: 12px; z-index: 10;
@@ -2145,7 +2183,7 @@ async function initCamera() {
   <button class="nav-btn btn-grey" id="btnBack" onclick="goBackToMenu()">回選關 →</button>
 </div>
  
-<div class="instruction-text">伸手到「哭」字旁，快速左右擺動手指搔癢，把它逗笑</div>
+<div class="instruction-text">伸手到「哭」字旁，快速左右擺動手指搔癢，把它逗笑<span class="instruction-en">Wiggle your fingers quickly beside “哭” to tickle it into a laugh</span></div>
  
 <div class="pagination">
   <div class="dot active"></div>
@@ -2347,7 +2385,8 @@ function smoothLandmarks(lm, tMs) {
 function detectHands() {
   if (!handLandmarker || !cameraOn || video.readyState < 2) return;
   if (video.currentTime === lastVideoTime) return;
-  if (performance.now() - lastDetectT < detectGap) return;   // 裝置較慢時跳過部分畫面，避免整個畫面卡住
+  // 只有平板／手機才限制偵測頻率（最多約每秒 22 次，偵測變慢時再自動放慢）；電腦版每一格都偵測，反應最即時
+  if (IS_TOUCH && performance.now() - lastDetectT < Math.max(45, detectGap)) return;
   lastVideoTime = video.currentTime;
   let res;
   const t0 = performance.now(); lastDetectT = t0;
@@ -2571,6 +2610,10 @@ let leaving = false;
 function goBackToMenu() {
   if (leaving) return;
   leaving = true;
+  // 釋放這一關的手部偵測模型與鏡頭畫面（鏡頭本身由選關畫面共用，不關閉）
+  try { if (handLandmarker) handLandmarker.close(); } catch {}
+  handLandmarker = null;
+  try { video.srcObject = null; } catch {}
   if (window.parent && window.parent !== window) window.parent.postMessage('back-to-menu', '*');
   else location.reload();
 }
@@ -2598,6 +2641,7 @@ function checkButtonHover(now, pts) {
    ============================================================ */
 let last = performance.now();
 function frame(now) {
+  if (leaving) return;   // 已離開關卡：停止畫面迴圈
   const f = Math.min(2.5, (now - last) / 16.667); last = now;
   detectHands();
   update(f, now);
