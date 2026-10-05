@@ -270,6 +270,7 @@ const easeOut = k => 1 - Math.pow(1 - k, 3);
 /* 手部游標圖層（疊在按鈕之上） */
 const curCanvas = $('#cursor'), cctx = curCanvas.getContext('2d');
 function drawCursor(x, y, big) {
+  if (!isFinite(x) || !isFinite(y)) return;
   const rOuter = big ? 38 : 28;
   const gOuter = cctx.createRadialGradient(x, y, 0, x, y, rOuter);
   gOuter.addColorStop(0, 'rgba(245, 160, 60, 0.7)');
@@ -521,10 +522,16 @@ function detectHands() {
   lastVideoTime = video.currentTime;
   let res;
   const t0 = performance.now(); lastDetectT = t0;
-  try { res = handLandmarker.detectForVideo(video, t0); } catch { return; }
+  try { res = handLandmarker.detectForVideo(video, t0); }
+  catch (err) { if (++detectErrors > 5) switchToCPU(err && err.message); return; }
   // 記錄每次偵測花多久：一次超過 25ms 時，自動拉開偵測間隔（最多約每秒 15 次），讓動畫保持順暢
   detectAvg = detectAvg * 0.9 + (performance.now() - t0) * 0.1;
   detectGap = detectAvg > 25 ? Math.min(66, detectAvg * 1.3) : 0;
+  const dur = performance.now() - t0;
+  if (!usingCPU && ++detectCount > 20) {   // 前 20 次是暖機，不列入判斷
+    slowScore = dur > 300 ? slowScore + 10 : dur > 45 ? slowScore + 1 : Math.max(0, slowScore - 1);
+    if (slowScore > 30) switchToCPU('GPU 偵測過慢（' + Math.round(dur) + 'ms）');
+  }
   if (res.landmarks && res.landmarks.length) {
     const lm = res.landmarks[0];
     let x = 0, y = 0;
@@ -678,12 +685,14 @@ function checkButtonHover(now, pts) {
    ============================================================ */
 function frame(now) {
   if (leaving) return;   // 已離開關卡：停止畫面迴圈
-  if (autoNextAt && now >= autoNextAt) { demo = null; setupChar(ci + 1); }
-  detectHands();
-  runDemo(now);
-  render(now);
-  checkButtonHover(now, handFromCam && handPt ? [handPt] : []);
-  requestAnimationFrame(frame);
+  requestAnimationFrame(frame);   // 先排好下一格：就算這一格出錯，畫面也不會整個停住
+  try {
+    if (autoNextAt && now >= autoNextAt) { demo = null; setupChar(ci + 1); }
+    detectHands();
+    runDemo(now);
+    render(now);
+    checkButtonHover(now, handFromCam && handPt ? [handPt] : []);
+  } catch (err) { console.error('畫面更新出錯（已略過這一格）：', err); }
 }
  
 async function initHands() {
@@ -694,8 +703,23 @@ async function initHands() {
     runningMode: 'VIDEO', numHands: 1,
     minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5
   });
-  try { handLandmarker = await HandLandmarker.createFromOptions(fileset, opts('GPU')); }
-  catch { handLandmarker = await HandLandmarker.createFromOptions(fileset, opts('CPU')); }
+  lmFactory = delegate => HandLandmarker.createFromOptions(fileset, opts(delegate));
+  try { handLandmarker = await lmFactory('GPU'); }
+  catch { handLandmarker = await lmFactory('CPU'); usingCPU = true; }
+}
+ 
+// 防當機：GPU 偵測持續變慢、卡住或出錯時，自動改用 CPU 偵測（畫面與玩法不變）
+let lmFactory = null, usingCPU = false, slowScore = 0, detectCount = 0, detectErrors = 0;
+async function switchToCPU(reason) {
+  if (usingCPU || !lmFactory || leaving) return;
+  usingCPU = true;
+  console.warn('手部偵測改用 CPU：', reason);
+  try {
+    const cpu = await lmFactory('CPU');
+    if (leaving) { try { cpu.close(); } catch {} return; }
+    const old = handLandmarker; handLandmarker = cpu; lastVideoTime = -1;
+    try { if (old) old.close(); } catch {}
+  } catch (err) { console.error('改用 CPU 失敗：', err); }
 }
 function getSharedStream() {
   try {
@@ -863,6 +887,7 @@ function sizeCursorLayer() { curCanvas.width = Math.round(W * DPR); curCanvas.he
 function clearCursorLayer() { cctx.setTransform(DPR, 0, 0, DPR, 0, 0); cctx.clearRect(0, 0, W, H); }
 // 發光的橘黃色游標＋白色中心點；big 時（例如捏合）稍微放大
 function drawCursor(x, y, big) {
+  if (!isFinite(x) || !isFinite(y)) return;
   const rOuter = big ? 38 : 28;
   const gOuter = cctx.createRadialGradient(x, y, 0, x, y, rOuter);
   gOuter.addColorStop(0, 'rgba(245, 160, 60, 0.7)');
@@ -1036,10 +1061,16 @@ function detectHands() {
   lastVideoTime = video.currentTime;
   let res;
   const t0 = performance.now(); lastDetectT = t0;
-  try { res = handLandmarker.detectForVideo(video, t0); } catch { return; }
+  try { res = handLandmarker.detectForVideo(video, t0); }
+  catch (err) { if (++detectErrors > 5) switchToCPU(err && err.message); return; }
   // 記錄每次偵測花多久：一次超過 25ms 時，自動拉開偵測間隔（最多約每秒 15 次），讓動畫保持順暢
   detectAvg = detectAvg * 0.9 + (performance.now() - t0) * 0.1;
   detectGap = detectAvg > 25 ? Math.min(66, detectAvg * 1.3) : 0;
+  const dur = performance.now() - t0;
+  if (!usingCPU && ++detectCount > 20) {   // 前 20 次是暖機，不列入判斷
+    slowScore = dur > 300 ? slowScore + 10 : dur > 45 ? slowScore + 1 : Math.max(0, slowScore - 1);
+    if (slowScore > 30) switchToCPU('GPU 偵測過慢（' + Math.round(dur) + 'ms）');
+  }
  
   if (res.landmarks && res.landmarks.length) {
     const lm = res.landmarks[0];
@@ -1102,16 +1133,11 @@ const easeOut = k => 1 - Math.pow(1 - k, 3);
  
 // 畫面靜止時（沒有劈砍特效、手沒在移動、沒有眨眼變化）就不重畫主畫布，省下大量效能
 let staticDrawn = false, lastDrawnIdx = -1, lastDrawnEye = -1;
-function trailMoving(now) {
-  if (now - handSeen > 300 || trail.length < 2) return false;
-  const a = trail[0], b = trail[trail.length - 1];
-  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) > 1;
-}
 function render(now) {
   clearCursorLayer();
-  // 游標（最上層圖層）每格都畫
-  if (now - handSeen < 140) drawCursor(hx, hy, false);
-  const busy = flash > 0.01 || shake > 0.3 || chips.length || slashes.length || ghosts.length || rings.length || impact || trailMoving(now);
+  // 手的拖尾與游標畫在最上層的游標圖層，每格都畫；手在移動時不必重畫底下的角色大圖
+  drawHand(now);
+  const busy = flash > 0.01 || shake > 0.3 || chips.length || slashes.length || ghosts.length || rings.length || impact;
   if (!busy && staticDrawn && idx === lastDrawnIdx && curEyeIdx === lastDrawnEye) return;
   staticDrawn = !busy; lastDrawnIdx = idx; lastDrawnEye = curEyeIdx;
  
@@ -1139,7 +1165,6 @@ function render(now) {
   drawRings(now);
   drawImpact(now);
   drawSlashes(now);
-  drawHand(now);
 }
  
 function drawGhosts(now) {
@@ -1222,15 +1247,16 @@ function drawSlashes(now) {
  
 function drawHand(now) {
   if (now - handSeen > 300) return;
-  // 手移動的橘色拖尾
-  ctx.lineCap = 'round';
+  // 手移動的橘色拖尾（畫在游標圖層）
+  cctx.lineCap = 'round';
   for (let i = 1; i < trail.length; i++) {
     const a = trail[i - 1], b = trail[i], k = 1 - (now - b.t) / 280;
     if (k <= 0) continue;
-    ctx.strokeStyle = `rgba(245,160,60,${0.35 * k})`;
-    ctx.lineWidth = 2 + 12 * k;
-    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    cctx.strokeStyle = `rgba(245,160,60,${0.35 * k})`;
+    cctx.lineWidth = 2 + 12 * k;
+    cctx.beginPath(); cctx.moveTo(a.x, a.y); cctx.lineTo(b.x, b.y); cctx.stroke();
   }
+  if (now - handSeen < 140) drawCursor(hx, hy, false);
 }
  
 /* ============================================================
@@ -1239,12 +1265,14 @@ function drawHand(now) {
 let last = performance.now();
 function frame(now) {
   if (leaving) return;   // 已離開關卡：停止畫面迴圈
-  const f = Math.min(2.5, (now - last) / 16.667); last = now;
-  detectHands();
-  update(f, now);
-  render(now);
-  checkButtonHover(now, now - handSeen < 140 ? [{ x: hx, y: hy }] : []);
-  requestAnimationFrame(frame);
+  requestAnimationFrame(frame);   // 先排好下一格：就算這一格出錯，畫面也不會整個停住
+  try {
+    const f = Math.min(2.5, (now - last) / 16.667); last = now;
+    detectHands();
+    update(f, now);
+    render(now);
+    checkButtonHover(now, now - handSeen < 140 ? [{ x: hx, y: hy }] : []);
+  } catch (err) { console.error('畫面更新出錯（已略過這一格）：', err); }
 }
  
 /* ============================================================
@@ -1320,8 +1348,23 @@ async function initHands() {
     runningMode: 'VIDEO', numHands: 1,
     minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5
   });
-  try { handLandmarker = await HandLandmarker.createFromOptions(fileset, opts('GPU')); }
-  catch { handLandmarker = await HandLandmarker.createFromOptions(fileset, opts('CPU')); }
+  lmFactory = delegate => HandLandmarker.createFromOptions(fileset, opts(delegate));
+  try { handLandmarker = await lmFactory('GPU'); }
+  catch { handLandmarker = await lmFactory('CPU'); usingCPU = true; }
+}
+ 
+// 防當機：GPU 偵測持續變慢、卡住或出錯時，自動改用 CPU 偵測（畫面與玩法不變）
+let lmFactory = null, usingCPU = false, slowScore = 0, detectCount = 0, detectErrors = 0;
+async function switchToCPU(reason) {
+  if (usingCPU || !lmFactory || leaving) return;
+  usingCPU = true;
+  console.warn('手部偵測改用 CPU：', reason);
+  try {
+    const cpu = await lmFactory('CPU');
+    if (leaving) { try { cpu.close(); } catch {} return; }
+    const old = handLandmarker; handLandmarker = cpu; lastVideoTime = -1;
+    try { if (old) old.close(); } catch {}
+  } catch (err) { console.error('改用 CPU 失敗：', err); }
 }
  
 function getSharedStream() {
@@ -1566,6 +1609,7 @@ function sizeCursorLayer() { curCanvas.width = Math.round(W * DPR); curCanvas.he
 function clearCursorLayer() { cctx.setTransform(DPR, 0, 0, DPR, 0, 0); cctx.clearRect(0, 0, W, H); }
 // 發光的橘黃色游標＋白色中心點；big 時（例如捏合）稍微放大
 function drawCursor(x, y, big) {
+  if (!isFinite(x) || !isFinite(y)) return;
   const rOuter = big ? 38 : 28;
   const gOuter = cctx.createRadialGradient(x, y, 0, x, y, rOuter);
   gOuter.addColorStop(0, 'rgba(245, 160, 60, 0.7)');
@@ -1783,10 +1827,16 @@ function detectHands() {
   lastVideoTime = video.currentTime;
   let res;
   const t0 = performance.now(); lastDetectT = t0;
-  try { res = handLandmarker.detectForVideo(video, t0); } catch { return; }
+  try { res = handLandmarker.detectForVideo(video, t0); }
+  catch (err) { if (++detectErrors > 5) switchToCPU(err && err.message); return; }
   // 記錄每次偵測花多久：一次超過 25ms 時，自動拉開偵測間隔（最多約每秒 15 次），讓動畫保持順暢
   detectAvg = detectAvg * 0.9 + (performance.now() - t0) * 0.1;
   detectGap = detectAvg > 25 ? Math.min(66, detectAvg * 1.3) : 0;
+  const dur = performance.now() - t0;
+  if (!usingCPU && ++detectCount > 20) {   // 前 20 次是暖機，不列入判斷
+    slowScore = dur > 300 ? slowScore + 10 : dur > 45 ? slowScore + 1 : Math.max(0, slowScore - 1);
+    if (slowScore > 30) switchToCPU('GPU 偵測過慢（' + Math.round(dur) + 'ms）');
+  }
  
   const hands = res.landmarks || [];
   const now = performance.now();
@@ -2050,12 +2100,14 @@ function checkButtonHover(now, pts) {
 let last = performance.now();
 function frame(now) {
   if (leaving) return;   // 已離開關卡：停止畫面迴圈
-  const f = Math.min(2.5, (now - last) / 16.667); last = now;
-  detectHands();
-  update(f, now);
-  render(now);
-  checkButtonHover(now, [slots.h0, slots.h1].filter(s => s.active));
-  requestAnimationFrame(frame);
+  requestAnimationFrame(frame);   // 先排好下一格：就算這一格出錯，畫面也不會整個停住
+  try {
+    const f = Math.min(2.5, (now - last) / 16.667); last = now;
+    detectHands();
+    update(f, now);
+    render(now);
+    checkButtonHover(now, [slots.h0, slots.h1].filter(s => s.active));
+  } catch (err) { console.error('畫面更新出錯（已略過這一格）：', err); }
 }
  
 /* ============================================================
@@ -2069,8 +2121,23 @@ async function initHands() {
     runningMode: 'VIDEO', numHands: 2,
     minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5
   });
-  try { handLandmarker = await HandLandmarker.createFromOptions(fileset, opts('GPU')); }
-  catch { handLandmarker = await HandLandmarker.createFromOptions(fileset, opts('CPU')); }
+  lmFactory = delegate => HandLandmarker.createFromOptions(fileset, opts(delegate));
+  try { handLandmarker = await lmFactory('GPU'); }
+  catch { handLandmarker = await lmFactory('CPU'); usingCPU = true; }
+}
+ 
+// 防當機：GPU 偵測持續變慢、卡住或出錯時，自動改用 CPU 偵測（畫面與玩法不變）
+let lmFactory = null, usingCPU = false, slowScore = 0, detectCount = 0, detectErrors = 0;
+async function switchToCPU(reason) {
+  if (usingCPU || !lmFactory || leaving) return;
+  usingCPU = true;
+  console.warn('手部偵測改用 CPU：', reason);
+  try {
+    const cpu = await lmFactory('CPU');
+    if (leaving) { try { cpu.close(); } catch {} return; }
+    const old = handLandmarker; handLandmarker = cpu; lastVideoTime = -1;
+    try { if (old) old.close(); } catch {}
+  } catch (err) { console.error('改用 CPU 失敗：', err); }
 }
  
 function getSharedStream() {
@@ -2239,6 +2306,7 @@ function sizeCursorLayer() { curCanvas.width = Math.round(W * DPR); curCanvas.he
 function clearCursorLayer() { cctx.setTransform(DPR, 0, 0, DPR, 0, 0); cctx.clearRect(0, 0, W, H); }
 // 發光的橘黃色游標＋白色中心點；big 時（靠近字、正在搔癢）稍微放大
 function drawCursor(x, y, big) {
+  if (!isFinite(x) || !isFinite(y)) return;
   const rOuter = big ? 38 : 28;
   const gOuter = cctx.createRadialGradient(x, y, 0, x, y, rOuter);
   gOuter.addColorStop(0, 'rgba(245, 160, 60, 0.7)');
@@ -2390,10 +2458,16 @@ function detectHands() {
   lastVideoTime = video.currentTime;
   let res;
   const t0 = performance.now(); lastDetectT = t0;
-  try { res = handLandmarker.detectForVideo(video, t0); } catch { return; }
+  try { res = handLandmarker.detectForVideo(video, t0); }
+  catch (err) { if (++detectErrors > 5) switchToCPU(err && err.message); return; }
   // 記錄每次偵測花多久：一次超過 25ms 時，自動拉開偵測間隔（最多約每秒 15 次），讓動畫保持順暢
   detectAvg = detectAvg * 0.9 + (performance.now() - t0) * 0.1;
   detectGap = detectAvg > 25 ? Math.min(66, detectAvg * 1.3) : 0;
+  const dur = performance.now() - t0;
+  if (!usingCPU && ++detectCount > 20) {   // 前 20 次是暖機，不列入判斷
+    slowScore = dur > 300 ? slowScore + 10 : dur > 45 ? slowScore + 1 : Math.max(0, slowScore - 1);
+    if (slowScore > 30) switchToCPU('GPU 偵測過慢（' + Math.round(dur) + 'ms）');
+  }
  
   if (res.landmarks && res.landmarks.length) {
     const lm = res.landmarks[0];
@@ -2642,12 +2716,14 @@ function checkButtonHover(now, pts) {
 let last = performance.now();
 function frame(now) {
   if (leaving) return;   // 已離開關卡：停止畫面迴圈
-  const f = Math.min(2.5, (now - last) / 16.667); last = now;
-  detectHands();
-  update(f, now);
-  render(now);
-  checkButtonHover(now, handFromCam && handPt ? [handPt] : []);
-  requestAnimationFrame(frame);
+  requestAnimationFrame(frame);   // 先排好下一格：就算這一格出錯，畫面也不會整個停住
+  try {
+    const f = Math.min(2.5, (now - last) / 16.667); last = now;
+    detectHands();
+    update(f, now);
+    render(now);
+    checkButtonHover(now, handFromCam && handPt ? [handPt] : []);
+  } catch (err) { console.error('畫面更新出錯（已略過這一格）：', err); }
 }
  
 /* ============================================================
@@ -2661,8 +2737,23 @@ async function initHands() {
     runningMode: 'VIDEO', numHands: 1,
     minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5
   });
-  try { handLandmarker = await HandLandmarker.createFromOptions(fileset, opts('GPU')); }
-  catch { handLandmarker = await HandLandmarker.createFromOptions(fileset, opts('CPU')); }
+  lmFactory = delegate => HandLandmarker.createFromOptions(fileset, opts(delegate));
+  try { handLandmarker = await lmFactory('GPU'); }
+  catch { handLandmarker = await lmFactory('CPU'); usingCPU = true; }
+}
+ 
+// 防當機：GPU 偵測持續變慢、卡住或出錯時，自動改用 CPU 偵測（畫面與玩法不變）
+let lmFactory = null, usingCPU = false, slowScore = 0, detectCount = 0, detectErrors = 0;
+async function switchToCPU(reason) {
+  if (usingCPU || !lmFactory || leaving) return;
+  usingCPU = true;
+  console.warn('手部偵測改用 CPU：', reason);
+  try {
+    const cpu = await lmFactory('CPU');
+    if (leaving) { try { cpu.close(); } catch {} return; }
+    const old = handLandmarker; handLandmarker = cpu; lastVideoTime = -1;
+    try { if (old) old.close(); } catch {}
+  } catch (err) { console.error('改用 CPU 失敗：', err); }
 }
  
 function getSharedStream() {
